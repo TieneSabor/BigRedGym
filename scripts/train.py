@@ -54,6 +54,12 @@ def make_train_parser():
         help="Override experiment_name (log dir is logs/<experiment_name>/...)",
     )
     parser.add_argument(
+        "--run_name",
+        type=str,
+        default=None,
+        help="Override runner.run_name (appended to the timestamped log dir)",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume optimizer and model state from an existing run.",
@@ -128,6 +134,8 @@ def setup(args=None, env_cfg=None, train_cfg=None):
 
     if args.experiment_name is not None:
         train_cfg.runner.experiment_name = args.experiment_name
+    if args.run_name is not None:
+        train_cfg.runner.run_name = args.run_name
     if args.resume:
         train_cfg.runner.resume = True
     if args.load_run is not None:
