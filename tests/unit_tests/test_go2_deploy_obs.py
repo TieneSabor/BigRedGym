@@ -32,8 +32,11 @@ def _controller(cfg=None):
     return SimpleNamespace(
         cfg=cfg,
         obs_vec_size=sum(cfg.obs_sizes[name] for name in cfg.obs_vector),
-        last_command=torch.tensor([0.5, -0.25, 0.75]),
+        last_command=torch.tensor([0.5, -0.25, 0.75, 0.3]),
         last_action=torch.zeros(2, 12),
+        last_sportmodestate_msg=SimpleNamespace(
+            position=[0.0, 0.0, 0.35], velocity=[0.1, 0.0, 0.0]
+        ),
         phase=0.4,
         _gait_reference=torch.linspace(-0.3, 0.3, 12),
     )
@@ -84,6 +87,29 @@ def test_wxyz_quaternion_projects_gravity_but_gyro_is_already_body_local():
     )
 
 
+def test_base_height_and_lin_vel_come_from_odometry_in_body_frame():
+    controller, message = _controller(), _message()
+    controller.last_sportmodestate_msg = SimpleNamespace(
+        position=[0.1, -0.2, 0.35], velocity=[1.0, 0.0, 0.0]
+    )
+    torch.testing.assert_close(
+        deploy_utility._get_obs_base_height(controller, message),
+        torch.tensor([0.35]),
+    )
+    # The fixture IMU quaternion is a quarter-turn about X, so world +X is
+    # invariant and the body-frame velocity matches the world-frame one.
+    torch.testing.assert_close(
+        deploy_utility._get_obs_base_lin_vel(controller, message),
+        torch.tensor([1.0, 0.0, 0.0]),
+    )
+
+
+def test_deploy_obs_vector_mirrors_the_actor_obs():
+    # rl_controller feeds lowstate_to_obs() straight to the trained actor, so
+    # the deployment vector has to be the actor's obs list, in order.
+    assert DeployConfig.obs_vector == Go2TrotRunnerCfg.actor.obs
+
+
 def test_observation_dispatch_preserves_configured_order_sizes_and_scaling():
     cfg = DeployConfig()
     cfg.obs_vector = [
@@ -102,7 +128,7 @@ def test_observation_dispatch_preserves_configured_order_sizes_and_scaling():
         dof_vel=2.0,
         base_ang_vel=0.5,
         dof_pos_target=0.25,
-        commands=[2.0, 4.0, 8.0],
+        commands=[2.0, 4.0, 8.0, 1.0],
         projected_gravity=2.0,
         dof_pos_obs=list(range(1, 13)),
         dof_accel=3.0,
@@ -117,7 +143,7 @@ def test_observation_dispatch_preserves_configured_order_sizes_and_scaling():
             -ordered,
             torch.tensor([0.2, -0.4, 0.6]),
             controller.last_action[0] / 0.25,
-            torch.tensor([0.25, -0.0625, 0.09375]),
+            torch.tensor([0.25, -0.0625, 0.09375, 0.3]),
             torch.tensor([0.0, -0.5, 0.0]),
             ordered / torch.arange(1, 13),
             ordered,
@@ -214,17 +240,12 @@ def test_deploy_observations_match_cpu_task_at_100hz(include_applied_action):
         backend.reset_state(torch.ones(1, dtype=torch.bool))
         env.phase_frequency[:] = DeployConfig.phase_frequency
         deploy_cfg = DeployConfig()
-        deploy_cfg.obs_vector = [
-            "base_ang_vel",
-            "projected_gravity",
-            "commands",
-            "dof_pos_obs",
-            "dof_vel",
-            "phase_obs",
-            "phase_frequency",
-        ]
-        if include_applied_action:
-            deploy_cfg.obs_vector.insert(5, "dof_pos_target")
+        # Mirror the real deployment vector. The applied-action term is only
+        # reproducible on hardware when the residual is not clipped against the
+        # absolute joint limits, hence the xfail variant below.
+        deploy_cfg.obs_vector = list(DeployConfig.obs_vector)
+        if not include_applied_action:
+            deploy_cfg.obs_vector.remove("dof_pos_target")
         deploy_cfg.DeployScaling = SimpleNamespace(**class_to_dict(cfg.scaling))
         controller = _controller(deploy_cfg)
         # Resolve this independent inverse mapping by joint names, so a wrong
@@ -236,6 +257,10 @@ def test_deploy_observations_match_cpu_task_at_100hz(include_applied_action):
             controller.last_command = env.commands[0].clone()
             controller.phase = env.phase[0].item()
             controller.last_action[0] = env.dof_pos_target[0]
+            controller.last_sportmodestate_msg = SimpleNamespace(
+                position=env.root_states[0, 0:3].tolist(),
+                velocity=env.root_states[0, 7:10].tolist(),
+            )
             message = SimpleNamespace(
                 motor_state=[
                     SimpleNamespace(
@@ -256,7 +281,7 @@ def test_deploy_observations_match_cpu_task_at_100hz(include_applied_action):
             actual = deploy_utility.lowstate_to_obs(controller, message)
             expected = env.get_states(deploy_cfg.obs_vector)[0]
 
-            expected_size = 48 if include_applied_action else 36
+            expected_size = 50 if include_applied_action else 38
             assert actual.shape == expected.shape == (expected_size,)
             torch.testing.assert_close(actual, expected, atol=3e-6, rtol=2e-5)
     finally:

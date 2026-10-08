@@ -90,8 +90,8 @@ class MainController:
         self.last_action = torch.zeros((2, 12))
         self.last_action_lock = threading.Lock()
 
-        # torch.tensor(3): [x_vel, y_vel, yaw_vel]
-        self.last_command = torch.zeros(3)
+        # torch.tensor(4): [x_vel, y_vel, yaw_vel, height]
+        self.last_command = torch.zeros(4)
         self.last_command_lock = threading.Lock()
 
         # Log obs freq / control freq
@@ -181,6 +181,7 @@ class MainController:
                     self.remote_controller.lin_vel_x,
                     self.remote_controller.lin_vel_y,
                     self.remote_controller.yaw_vel,
+                    self.cfg.command_height,
                 ]
             )
 

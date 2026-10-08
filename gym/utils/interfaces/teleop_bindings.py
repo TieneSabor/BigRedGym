@@ -81,6 +81,16 @@ class TeleopCommands:
 
         env.commands[:] = 0.0
         env.commands[:, 0] = 1.0  # seed forward velocity so motion is visible
+
+        # Height control exists only on tasks whose command vector carries a
+        # height slot (4-wide, e.g. go2trot).  Read the bounds from that task's
+        # own command ranges so teleop cannot drift from what training sampled.
+        self.height_control = env.commands.shape[1] == 4
+        if self.height_control:
+            self.min_height, self.max_height = env.command_ranges["height"]
+            self.increment_height = (self.max_height - self.min_height) * 0.2
+            env.commands[:, 3] = (self.min_height + self.max_height) / 2.0
+
         if hasattr(env.cfg, "commands"):
             env.cfg.commands.resampling_time = env.max_episode_length_s + 1
 
@@ -101,6 +111,14 @@ class TeleopCommands:
             c[:, 2] = torch.clamp(c[:, 2] + self.increment_yaw, max=self.max_vel_yaw)
         elif action == "yaw_right":
             c[:, 2] = torch.clamp(c[:, 2] - self.increment_yaw, min=-self.max_vel_yaw)
+        elif action == "up":
+            if not self.height_control:
+                return
+            c[:, 3] = torch.clamp(c[:, 3] + self.increment_height, max=self.max_height)
+        elif action == "down":
+            if not self.height_control:
+                return
+            c[:, 3] = torch.clamp(c[:, 3] - self.increment_height, min=self.min_height)
         elif action == "reset":
             self.env.timed_out[:] = True
             self.env.reset()

@@ -13,6 +13,11 @@ class Go2Trot(LeggedRobot):
     def _init_buffers(self):
         super()._init_buffers()
 
+        # expanding the command to accept height control
+        self.commands = torch.zeros(
+            self.num_envs, 4, dtype=torch.float, device=self.device
+        )
+
         self._actuated_dof_pos_limits = self.dof_pos_limits.index_select(
             0, self.actuated_dof_indices
         )
@@ -117,6 +122,17 @@ class Go2Trot(LeggedRobot):
     def _resample_commands(self, command_mask):
         super()._resample_commands(command_mask)
 
+        # Also sample the height command
+        min_height = self.command_ranges["height"][0]
+        max_height = self.command_ranges["height"][1]
+        candidate = torch_rand_float(
+            min_height,
+            max_height,
+            (self.num_envs, 1),
+            device=self.device,
+        ).squeeze(1)
+        masked_update(self.commands[:, 3], candidate, command_mask)
+
         forward_commands = torch.tensor(
             self.command_ranges["lin_vel_x"], device=self.device
         )
@@ -135,7 +151,7 @@ class Go2Trot(LeggedRobot):
             drop = command_mask.unsqueeze(1) & (
                 torch.rand(self.num_envs, 1, device=self.device) >= 0.8
             )
-            self.commands[:, 1:].masked_fill_(drop, 0.0)
+            self.commands[:, 1:3].masked_fill_(drop, 0.0)
             drop = command_mask.unsqueeze(1) & (
                 torch.rand(self.num_envs, 1, device=self.device) >= 0.8
             )
@@ -143,7 +159,7 @@ class Go2Trot(LeggedRobot):
             drop = command_mask.unsqueeze(1) & (
                 torch.rand(self.num_envs, 1, device=self.device) >= 0.9
             )
-            self.commands.masked_fill_(drop, 0.0)
+            self.commands[:, :3].masked_fill_(drop, 0.0)
 
     def _reset_idx(self, reset_mask):
         super()._reset_idx(reset_mask)
@@ -224,6 +240,14 @@ class Go2Trot(LeggedRobot):
         error /= self.scales["base_height"]
         error = torch.clamp(error, max=0, min=None).flatten()
         return self._sqrdexp(error)
+
+    def _reward_base_height(self):
+        """Penalize base height away from target"""
+        # Slice as [:, 3:4] to keep base_height's (num_envs, 1) shape; indexing
+        # a single column would broadcast into a (num_envs, num_envs) matrix.
+        error = self.base_height - self.commands[:, 3:4]
+        error /= self.scales["base_height"]
+        return self._sqrdexp(error.flatten())
 
     def _reward_tracking_lin_vel(self):
         """Tracking of linear velocity commands (xy axes)"""

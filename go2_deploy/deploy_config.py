@@ -12,19 +12,27 @@ class DeployConfig:
 
     phase_frequency = 2.0  # for go2trot env
 
+    # The Go2 remote has no height axis, so the deployed policy is commanded a
+    # fixed height: the midpoint of the task's training range.
+    command_height = 0.5 * (
+        Go2TrotCfg.commands.ranges.height[0] + Go2TrotCfg.commands.ranges.height[1]
+    )
+
     # Apply exponential moving average to actions
     exp_moving_avg = True
     ema_smoothing_factor = 0.1
 
+    # Must mirror Go2TrotRunnerCfg.actor.obs: rl_controller.setup_actor() loads
+    # an actor trained on that list, in that order.
     obs_vector = [
+        "base_height",
+        "base_lin_vel",
         "base_ang_vel",
         "projected_gravity",
         "commands",
         "dof_pos_obs",
         "dof_vel",
         "dof_pos_target",
-        "phase_obs",
-        "phase_frequency",
     ]  # add later? foot contact
 
     # Scale observations
@@ -40,9 +48,11 @@ class DeployConfig:
 
     # Specify size of observation vector. should not have to modify this
     obs_sizes = {
+        "base_height": 1,
+        "base_lin_vel": 3,
         "base_ang_vel": 3,
         "projected_gravity": 3,
-        "commands": 3,
+        "commands": 4,
         "dof_pos_obs": 12,
         "dof_vel": 12,
         "dof_accel": 12,

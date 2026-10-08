@@ -22,6 +22,19 @@ def _get_obs_projected_gravity(main_controller, lowstate_msg):
     return quat_rotate_inverse(base_quat, gravity_vec)
 
 
+def _get_obs_base_height(main_controller, lowstate_msg):
+    # World-frame base z from the robot's own odometry. The task observes the
+    # same quantity (root_states[:, 2]).
+    return torch.tensor([main_controller.last_sportmodestate_msg.position[2]])
+
+
+def _get_obs_base_lin_vel(main_controller, lowstate_msg):
+    # Odometry velocity is world-frame; the task observes body-frame velocity.
+    base_quat = torch.tensor(lowstate_msg.imu_state.quaternion)[[1, 2, 3, 0]]
+    world_vel = torch.tensor(main_controller.last_sportmodestate_msg.velocity)
+    return quat_rotate_inverse(base_quat, world_vel)
+
+
 def _get_obs_commands(main_controller, lowstate_msg):
     return main_controller.last_command
 
@@ -70,6 +83,8 @@ def _get_obs_phase_frequency(main_controller, lowstate_msg):
 # Returns torch tensor: observation vector from lowstate_msg
 def lowstate_to_obs(main_controller, lowstate_msg):
     get_obs_piece = {
+        "base_height": _get_obs_base_height,
+        "base_lin_vel": _get_obs_base_lin_vel,
         "base_ang_vel": _get_obs_base_ang_vel,
         "projected_gravity": _get_obs_projected_gravity,
         "commands": _get_obs_commands,

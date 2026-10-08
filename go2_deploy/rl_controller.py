@@ -48,6 +48,16 @@ class RLController:
     def __init__(self):
         self.actor = setup_actor()
         self.cfg = DeployConfig()
+        # The actor was trained on Go2TrotRunnerCfg.actor.obs; a checkpoint
+        # trained with a different obs list would otherwise fail deep inside the
+        # network with an opaque shape error.
+        expected_obs = sum(self.cfg.obs_sizes[name] for name in self.cfg.obs_vector)
+        if self.actor.num_obs != expected_obs:
+            raise ValueError(
+                f"actor expects {self.actor.num_obs} observations but "
+                f"DeployConfig.obs_vector provides {expected_obs}; the checkpoint "
+                "does not match this deployment configuration"
+            )
 
     # Returns torch.tensor(12): actor outputs in radians which is the
     # target pos minus default_pos + reference traj (when applicable)
