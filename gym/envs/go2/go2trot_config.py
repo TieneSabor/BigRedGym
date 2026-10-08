@@ -169,7 +169,7 @@ class Go2TrotRunnerCfg(Go2RunnerCfg):
                 base_height = 2.0
                 action_rate = 0.25
                 action_rate2 = 0.025
-                trot_support = 0.625
+                trot_support = 3.00 # 0.625
                 swing_contact = 1.25
 
             class termination_weight:
