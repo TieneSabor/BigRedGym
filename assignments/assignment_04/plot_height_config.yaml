@@ -1,0 +1,18 @@
+# Plot/log config for `scripts/play.py --plot_config_yaml <this file>`.
+#
+# save_path: where the CSV is written (parent directories are created).
+# fields:    CSV column name -> where its value comes from each control step.
+#
+# A field is either an env attribute plus a column index:
+#     <column>: {attr: <env attribute>, dim: <index>}
+# which reads `env.<attr>[0, dim]` (environment 0), or the reserved clock:
+#     <column>: {source: clock}
+# which reads wall-clock seconds since logging started.  Unknown attributes,
+# non-tensor attributes, and out-of-range dims abort before the sim runs.
+
+save_path: assignments/assignment_04/data/height_02.csv
+
+fields:
+  time: {source: clock}
+  height_command: {attr: commands, dim: 3}
+  base_height: {attr: base_height, dim: 0}

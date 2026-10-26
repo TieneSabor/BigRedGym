@@ -5,14 +5,20 @@ Usage:
     uv run scripts/play.py --task mini_cheetah --num_envs 8
     uv run scripts/play.py --task mini_cheetah --load_run May08_12-34-56_ \
                            --checkpoint 1500
+    uv run scripts/play.py --task go2trot \
+                           --plot_config_yaml scripts/plot_config_example.yaml
 
 Supports MuJoCo CPU/Warp and optional VSim checkpoints.
 """
 
 import argparse
+import csv
+import os
 import random
+import time
 
 import torch
+import yaml
 
 from gym.utils.helpers import set_seed
 from gym.utils.task_registry import task_registry
@@ -47,6 +53,13 @@ def get_play_args(argv=None):
         action="store_true",
         help="Load environment and runner configs saved with the selected run.",
     )
+    parser.add_argument(
+        "--plot_config_yaml",
+        type=str,
+        default=None,
+        help="YAML file listing env fields to log to CSV and the save path "
+        "(see scripts/plot_config_example.yaml)",
+    )
     parser.add_argument("--headless", action="store_true", default=False)
     parser.add_argument(
         "--backend",
@@ -73,6 +86,99 @@ def get_play_args(argv=None):
         "Use --no-keyboard to disable.",
     )
     return parser.parse_args(argv)
+
+
+def load_log_spec(path):
+    """Load a plot-config YAML: a save path plus the fields to log.
+
+    The file is a mapping with a required ``save_path`` and a non-empty
+    ``fields`` mapping.  Each field maps a CSV column name to either
+    ``{attr: <env attribute>, dim: <column>}`` or the reserved
+    ``{source: clock}`` (wall-clock seconds since logging started).
+    """
+    with open(path) as f:
+        spec = yaml.safe_load(f)
+    if not isinstance(spec, dict):
+        raise ValueError(f"{path}: expected a mapping at the top level")
+    if "save_path" not in spec:
+        raise ValueError(f"{path}: missing required 'save_path'")
+    if "fields" not in spec:
+        raise ValueError(f"{path}: missing required 'fields'")
+    fields = spec["fields"]
+    if not isinstance(fields, dict) or not fields:
+        raise ValueError(f"{path}: 'fields' must be a non-empty mapping")
+    for name, field_spec in fields.items():
+        if not isinstance(field_spec, dict):
+            raise ValueError(
+                f"{path}: field {name!r} must be a mapping "
+                f"(e.g. {{attr: commands, dim: 3}})"
+            )
+    return spec["save_path"], fields
+
+
+def make_getter(env, name, field_spec):
+    """Resolve one field spec to a zero-arg callable returning a float.
+
+    Only the clock is special-cased.  Every other field addresses an env
+    attribute by name, then reads ``[env 0, dim]``.  Every problem is raised
+    here, at logger construction, so a bad spec fails before the sim runs.
+    """
+    if field_spec.get("source") == "clock":
+        start = time.monotonic()
+        return lambda: time.monotonic() - start
+
+    if "source" in field_spec:
+        raise ValueError(
+            f"field {name!r}: unknown source {field_spec['source']!r} "
+            "(only 'clock' is supported)"
+        )
+    attr = field_spec.get("attr")
+    if not isinstance(attr, str):
+        raise ValueError(
+            f"field {name!r}: expected 'attr' or 'source: clock', got {field_spec!r}"
+        )
+    if not hasattr(env, attr):
+        raise AttributeError(f"field {name!r}: env has no attribute {attr!r}")
+    tensor = getattr(env, attr)
+    if not torch.is_tensor(tensor):
+        raise TypeError(
+            f"field {name!r}: env.{attr} is {type(tensor).__name__}, not a tensor"
+        )
+    if tensor.dim() != 2:
+        raise ValueError(
+            f"field {name!r}: env.{attr} must be 2-D, got {tuple(tensor.shape)}"
+        )
+    dim = field_spec.get("dim", 0)
+    if not isinstance(dim, int):
+        raise ValueError(f"field {name!r}: dim must be an integer, got {dim!r}")
+    if not 0 <= dim < tensor.shape[1]:
+        raise IndexError(
+            f"field {name!r}: dim {dim} out of range for "
+            f"env.{attr}{tuple(tensor.shape)}"
+        )
+    return lambda: tensor[0, dim].item()
+
+
+class PlayCsvLogger:
+    """Write selected env fields to CSV, one row per control step."""
+
+    def __init__(self, env, save_path, fields):
+        self.names = list(fields)
+        # Resolve every field up front so a bad spec fails before any file I/O.
+        self.getters = [make_getter(env, name, fields[name]) for name in self.names]
+        save_dir = os.path.dirname(save_path)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+        self.file = open(save_path, "w", newline="")
+        self.writer = csv.writer(self.file)
+        self.writer.writerow(self.names)
+
+    def log(self):
+        self.writer.writerow([getter() for getter in self.getters])
+        self.file.flush()
+
+    def close(self):
+        self.file.close()
 
 
 def setup(args):
@@ -130,16 +236,22 @@ def setup(args):
     return env, runner
 
 
-def play(env, runner):
+def play(env, runner, logger=None):
     n_steps = 10 * int(env.max_episode_length)
-    for _ in range(n_steps):
-        runner.set_actions(
-            runner.actor_cfg["actions"],
-            runner.get_inference_actions(),
-            runner.actor_cfg["disable_actions"],
-        )
-        env.step()
-        env.check_exit()
+    try:
+        for _ in range(n_steps):
+            runner.set_actions(
+                runner.actor_cfg["actions"],
+                runner.get_inference_actions(),
+                runner.actor_cfg["disable_actions"],
+            )
+            env.step()
+            if logger is not None:
+                logger.log()
+            env.check_exit()
+    finally:
+        if logger is not None:
+            logger.close()
 
 
 if __name__ == "__main__":
@@ -184,4 +296,8 @@ if __name__ == "__main__":
                 from gym.utils.interfaces.CommandVisualizer import CommandVisualizer
 
                 CommandVisualizer(env)
-        play(env, runner)
+        logger = None
+        if args.plot_config_yaml is not None:
+            save_path, fields = load_log_spec(args.plot_config_yaml)
+            logger = PlayCsvLogger(env, save_path, fields)
+        play(env, runner, logger)

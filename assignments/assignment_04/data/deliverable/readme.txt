@@ -1,0 +1,1 @@
+The height_02.webm shows the simulation under three "down-and-up" commands.  The time series plot of the height command and the body height during the recorded simulation is in height_02.pdf.  The start of the recording is roughly at t=15 in the plot.

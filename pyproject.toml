@@ -11,6 +11,7 @@ dependencies = [
     "pandas",
     "matplotlib",
     "marimo>=0.23.16",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
